@@ -27,6 +27,7 @@ VERBOSE = bool(os.environ.get("BR_VERBOSE"))
 K_DEF, K_STMT, K_HDR = 1, 2, 3
 F_DOC, F_EXPR = 2, 3
 
+CODING = re.compile(r"coding[:=]")
 HUNK = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 STRINGS = re.compile(r"""('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")""")
@@ -178,9 +179,11 @@ class Selector:
         flags, text, n = rec["flags"], rec["text"], rec["n"]
         if flags is None or not all(is_comment_or_blank(s) for s in added):
             return False
+        if any(CODING.search(s) or s.startswith("#!") for s in added):
+            return False
         if removed:
             return all(2 < l <= n and text[l - 1] in ("", "#") and not flags[l] & 1 for l in removed)
-        return 2 < anchor <= n and not flags[anchor] & 2
+        return anchor <= n and (anchor < 1 or not flags[anchor] & 2)
 
     # -- python sources
     def py_file(self, path, rec, groups):
@@ -213,10 +216,18 @@ class Selector:
             return r[3]
         if kind == K_STMT and r[6] == F_DOC:
             return 0
-        return self.module_sel(path, rec, r)
+        return self.module_sel(path, rec, r, l, l)
 
-    def module_sel(self, path, rec, r):
+    def module_sel(self, path, rec, r, lo=None, hi=None):
         kind, names, cls, flavour = r[0], r[4], r[5], r[6]
+        if lo is not None and kind == K_STMT:
+            # a line strictly inside a multi-line lambda only matters when the lambda runs
+            best = None
+            for ls, le, lb in r[7]:
+                if ls <= lo and hi < le and (ls < lo or hi > lo) and (best is None or le - ls < best[1] - best[0]):
+                    best = (ls, le, lb)
+            if best is not None:
+                return best[2]
         own = r[3] | self.import_tests
         grp = self.group_of(path)
         allowed = self.dialect.get(grp) if grp else None
@@ -282,7 +293,7 @@ class Selector:
                 if ri:
                     r = regs[ri]
                     if r[0] in (K_STMT, K_HDR) and r[1] <= anchor < r[2]:
-                        return self.module_sel(path, rec, r)
+                        return self.module_sel(path, rec, r, anchor + 1, anchor)
         grp = self.group_of(path)
         allowed = self.dialect.get(grp) if grp else None
         cls = ""

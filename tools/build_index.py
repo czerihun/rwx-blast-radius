@@ -231,7 +231,15 @@ def analyze_source(src, exec_bits, names_all):
         for ln in range(s, min(e, n) + 1):
             b |= lbits[ln]
         names = tuple(sorted(stmt_names(node)))
-        regs.append([kind, s, e, b, names, cls, flavour])
+        lams = []
+        if kind == K_STMT:
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Lambda) and sub.end_lineno > sub.lineno:
+                    lb = 0
+                    for ln in range(sub.lineno, sub.end_lineno + 1):
+                        lb |= exec_bits.get(ln, 0)
+                    lams.append((sub.lineno, sub.end_lineno, lb))
+        regs.append([kind, s, e, b, names, cls, flavour, tuple(lams)])
         ridx = len(regs) - 1
         for ln in range(s, min(e, n) + 1):
             if not lmap[ln]:

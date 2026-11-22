@@ -118,6 +118,19 @@ def main():
                 continue
             nl = lines[:i] + [new] + lines[i + 1:]
             patch = make_patch(path, lines, nl)
+        elif kind == "delete":
+            path = rng.choice(srcs)
+            lines = open(os.path.join(args.src, path), encoding="utf-8").read().split("\n")
+            i = rng.randrange(len(lines))
+            l = lines[i].rstrip()
+            if idx is not None:
+                rec = idx["src"][path]
+                if i + 1 > rec["n"] or rec["lbits"][i + 1] <= 0:
+                    continue
+            if not l.strip() or l.strip().startswith(("#", "def ", "class ", "@", "return", "import", "from")) or l[-1] in ":([{,\\":
+                continue
+            nl = lines[:i] + lines[i + 1:]
+            patch = make_patch(path, lines, nl)
         elif kind == "fixture":
             path = rng.choice(fixtures)
             lines = open(os.path.join(args.src, path), encoding="utf-8").read().split("\n")
