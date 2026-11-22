@@ -38,6 +38,109 @@ DOC_DIRS = ("posts/", "benchmarks/", "pdoc/", ".github/", "sqlglot-integration-t
 SETUP_FUNCS = ("setUp", "tearDown", "setUpClass", "tearDownClass", "setup_method", "teardown_method")
 
 
+TOKEN = re.compile(r"""('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|\d[\w.]*|[A-Za-z_]\w*|\S)""")
+SRC_ROOT = os.environ.get("BR_SQLGLOT", "/opt/sqlglot")
+
+
+def literal_only(old_lines, new_lines):
+    """True when the edit only swaps literals for literals of the same kind
+    (number/number, string/string, True/False): such an edit cannot raise at import."""
+    a = TOKEN.findall("\n".join(old_lines))
+    b = TOKEN.findall("\n".join(new_lines))
+    if len(a) != len(b):
+        return False
+
+    def kind(t):
+        if t in ("True", "False"):
+            return "b"
+        if t[0] in "'\"":
+            return "s"
+        if t[0].isdigit():
+            return "n"
+        return None
+
+    for x, y in zip(a, b):
+        if x != y and not (kind(x) and kind(x) == kind(y)):
+            return False
+    return True
+
+
+def apply_hunks(src_text, hunks):
+    src = src_text.split("\n")
+    out, pos = [], 0
+    for a, oc, lines in hunks:
+        start = a - 1 if oc else a
+        out.extend(src[pos:start])
+        pos = start
+        for t in lines:
+            c = t[:1]
+            if c == " ":
+                out.append(src[pos])
+                pos += 1
+            elif c == "-":
+                pos += 1
+            else:
+                out.append(t[1:])
+    out.extend(src[pos:])
+    return "\n".join(out)
+
+
+IMPORT_PROBE = (
+    "import sys, importlib\n"
+    "import sqlglot\n"
+    "for m in sys.argv[1:]:\n"
+    "    importlib.import_module(m)\n"
+    "    parts = m.split('.')\n"
+    "    if len(parts) == 3 and parts[1] in ('dialects', 'parsers', 'generators', 'typing') and parts[2] not in ('dialect', 'base', '__init__'):\n"
+    "        d = sqlglot.Dialect.get_or_raise(parts[2])\n"
+    "        d.tokenizer; d.parser(); d.generator()\n"
+)
+
+
+def import_ok(files):
+    """Import the patched package in a throw-away overlay; False if anything raises."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    base = os.path.join(SRC_ROOT, "sqlglot")
+    if not os.path.isdir(base):
+        return False
+    patched = {}
+    mods = []
+    for f in files:
+        path = f["old"]
+        if path.startswith("sqlglot/") and path.endswith(".py") and f["status"] == "modified":
+            try:
+                text = open(os.path.join(SRC_ROOT, path), encoding="utf-8").read()
+            except OSError:
+                return False
+            patched[path] = apply_hunks(text, f["hunks"])
+            mods.append(path[:-3].replace("/", ".").removesuffix(".__init__"))
+    root = tempfile.mkdtemp(prefix="ov")
+    try:
+        for dirpath, _, fns in os.walk(base):
+            rel = os.path.relpath(dirpath, SRC_ROOT)
+            os.makedirs(os.path.join(root, rel), exist_ok=True)
+            for fn in fns:
+                key = rel + "/" + fn
+                dst = os.path.join(root, rel, fn)
+                if key in patched:
+                    open(dst, "w", encoding="utf-8").write(patched[key])
+                elif fn.endswith(".py") or fn == "py.typed":
+                    os.symlink(os.path.join(dirpath, fn), dst)
+        env = dict(os.environ, PYTHONPATH=root, PYTHONDONTWRITEBYTECODE="1")
+        r = subprocess.run(
+            [sys.executable, "-c", IMPORT_PROBE, *mods],
+            cwd=root, env=env, capture_output=True, timeout=60,
+        )
+        return r.returncode == 0
+    except Exception:  # noqa
+        return False
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def is_comment_or_blank(s):
     s = s.strip()
     return not s or s.startswith("#")
@@ -55,6 +158,7 @@ def parse_patch(text):
     old_ln = 0
     in_hunk = False
     rem_old = rem_new = 0
+    hunk_lines = []
 
     def flush():
         nonlocal group
@@ -65,6 +169,8 @@ def parse_patch(text):
     for line in text.split("\n"):
         if in_hunk:
             c = line[:1]
+            if c in " -+":
+                hunk_lines.append(line)
             if c == "-":
                 if group is None:
                     group = ([], [], old_ln - 1, [])
@@ -98,7 +204,7 @@ def parse_patch(text):
             parts = line[11:].split(" ")
             a = parts[0][2:] if parts[0].startswith("a/") else parts[0]
             b = parts[-1][2:] if parts[-1].startswith("b/") else parts[-1]
-            cur = {"old": a, "new": b, "status": "modified", "groups": [], "binary": False}
+            cur = {"old": a, "new": b, "status": "modified", "groups": [], "binary": False, "hunks": []}
             files.append(cur)
         elif cur is None:
             continue
@@ -133,6 +239,8 @@ def parse_patch(text):
                 nc = 1 if m.group(4) is None else int(m.group(4))
                 old_ln = a + 1 if oc == 0 else a
                 rem_old, rem_new = oc, nc
+                hunk_lines = []
+                cur["hunks"].append((a, oc, hunk_lines))
                 in_hunk = oc > 0 or nc > 0
     flush()
     return files
@@ -262,7 +370,8 @@ class Selector:
         if not names or l > rec["n"]:
             return 0
         ri = rec["lmap"][l]
-        if ri and rec["regs"][ri][0] != K_DEF:
+        # only a replaced statement head can define new names (not keyword args inside a call)
+        if ri and rec["regs"][ri][0] != K_DEF and rec["regs"][ri][1] == l:
             grp = self.group_of(path)
             return self.name_bits(names, self.dialect.get(grp) if grp else None)
         return 0
