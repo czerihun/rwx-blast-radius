@@ -8,6 +8,6 @@ COPY data/index.bin /app/data/index.bin
 COPY data/mapping.bin /app/data/mapping.bin
 COPY data/identity.bin /app/data/identity.bin
 ENV PYTHONDONTWRITEBYTECODE=1
-ENV BR_IDENTITY_MODE=observed BR_ORDER_MODE=observed BR_MAPPING_MODE=optimistic \
-    BR_PRUNE_FRESH_COPY=1 BR_PRUNE_IMPORTS=1
+ENV BR_IDENTITY_MODE=observed BR_ORDER_MODE=observed BR_MAPPING_MODE=import-guarded \
+    BR_PRUNE_FRESH_COPY=1 BR_PRUNE_IMPORTS=1 BR_PRUNE_ADDED_NAMES=1 BR_SOURCE_READ_GUARD=1
 CMD ["python", "/app/selector.py"]

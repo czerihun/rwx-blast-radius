@@ -15,8 +15,7 @@ the index are always included.
 This is a heuristic, not a proof of zero misses: coverage can miss new execution
 paths, import-time failures, reflection and subprocess behavior. Experimental
 selection modes can additionally remove covered tests using baseline observations;
-the image enables high-risk modes by default and has missed failing held-out
-mutations. The Python
+the image enables high-risk modes by default. The Python
 comment/docstring and documentation shortcuts can also miss source-inspection
 or other runtime effects. Validate independently before submitting.
 
@@ -50,11 +49,11 @@ These are not proofs: baseline operands, mapping reads, and dependencies can
 change on a patched or reordered execution. In particular, dictionary reads
 during import or through native operations can escape test attribution.
 Profiling also substitutes synchronous process pools and skips observation
-while `tracemalloc` is active. The default misses a verified import-time
-dictionary-dependency mutation and a source-inspection mutation. Set
-`BR_MAPPING_MODE=import-guarded` and `BR_SOURCE_READ_GUARD=1` for a less
-aggressive alternative that retains both of those tests, though it is still
-heuristic. The image contains no sample answers.
+while `tracemalloc` is active. The default uses `BR_MAPPING_MODE=import-guarded`
+and `BR_SOURCE_READ_GUARD=1`, retaining tests missed by the faster optimistic
+mapping configuration on verified import-time dictionary-dependency and
+source-inspection mutations. It is still heuristic. The image contains no
+sample answers.
 
 The committed comparison and mapping profiles were recorded with
 `tools/record/identity_profile.py` and `tools/record/mapping_profile.py` on
