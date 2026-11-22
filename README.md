@@ -13,7 +13,10 @@ and binary Python patches fall back to all indexed tests; tests absent from
 the index are always included.
 
 This is a heuristic, not a proof of zero misses: coverage can miss new execution
-paths, import-time failures, reflection and subprocess behavior. The Python
+paths, import-time failures, reflection and subprocess behavior. Experimental
+selection modes can additionally remove covered tests using baseline observations;
+the image enables high-risk modes by default and has missed failing held-out
+mutations. The Python
 comment/docstring and documentation shortcuts can also miss source-inspection
 or other runtime effects. Validate independently before submitting.
 
@@ -31,10 +34,47 @@ coverage database, plugin metadata, and official `tests.json`; it does not use
 failure answers. The official sample and format checks remain `make sample` and
 `make check` below.
 
-## Experimental semantic probes
+## Experimental high-risk selection
 
-The experimental branch includes offline-only probes; neither their outputs nor
-sample answers are used by the selector. They do **not** justify pruning:
+The experimental image can use test-specific identity, ordering and mapping
+observations recorded on the pinned, unpatched suite. The `BR_IDENTITY_MODE`,
+`BR_ORDER_MODE` and `BR_MAPPING_MODE` environment variables select the
+corresponding heuristic (`observed`, `optimistic`, or, where supported,
+`type-optimistic` or `import-guarded`). `BR_PRUNE_FRESH_COPY`,
+`BR_PRUNE_IMPORTS` and `BR_PRUNE_ADDED_NAMES` enable further heuristic pruning;
+`BR_SOURCE_READ_GUARD=1` retains indexed source readers. Set pruning modes to
+`off` and pruning flags to `0` to recover baseline selection; leave the source
+reader guard at `1` for the more conservative fallback.
+
+These are not proofs: baseline operands, mapping reads, and dependencies can
+change on a patched or reordered execution. In particular, dictionary reads
+during import or through native operations can escape test attribution.
+Profiling also substitutes synchronous process pools and skips observation
+while `tracemalloc` is active. The default misses a verified import-time
+dictionary-dependency mutation and a source-inspection mutation. Set
+`BR_MAPPING_MODE=import-guarded` and `BR_SOURCE_READ_GUARD=1` for a less
+aggressive alternative that retains both of those tests, though it is still
+heuristic. The image contains no sample answers.
+
+The committed comparison and mapping profiles were recorded with
+`tools/record/identity_profile.py` and `tools/record/mapping_profile.py` on
+the pinned checkout with the full indexed test suite, `SKIP_INTEGRATION=0`,
+and pytest-xdist. The corresponding `merge_identity_profile.py` and
+`merge_mapping_profile.py` scripts require successful runs covering every
+indexed test. Both profiles are patch-independent and are copied into the
+image; no tests or dependencies are downloaded during the image build.
+To regenerate them, set `PYTHONPATH` to include the checkout and this
+repository's `tools` directory, set `IDENTITY_PROFILE_SRC`,
+`IDENTITY_PROFILE_OUT`, and `IDENTITY_PROFILE_TESTS` to the checkout, an empty
+output directory, and `tests.json`, respectively, then run `pytest -p
+record.identity_profile -n 2 --dist loadfile`. Repeat with the corresponding
+`MAPPING_PROFILE_*` variables and `record.mapping_profile`. Run each merge
+script with `--help` for its required inputs.
+
+## Offline semantic probes
+
+The following separate probes and evaluator are offline-only; their outputs and
+sample answers are not used by the selector. They do **not** justify pruning:
 recorded values may differ on another execution, and the identity/equality
 probe uses the recorder's synchronous process-pool approximation.
 

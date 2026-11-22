@@ -23,6 +23,13 @@ DATA = os.environ.get("BR_DATA", "/data")
 INDEX = os.environ.get("BR_INDEX", os.path.join(HERE, "data", "index.bin"))
 LEVEL = os.environ.get("BR_LEVEL", "L0")  # L0: statement level, L1: function level
 VERBOSE = bool(os.environ.get("BR_VERBOSE"))
+IDENTITY_MODE = os.environ.get("BR_IDENTITY_MODE", "off")
+ORDER_MODE = os.environ.get("BR_ORDER_MODE", "off")
+MAPPING_MODE = os.environ.get("BR_MAPPING_MODE", "off")
+PRUNE_FRESH_COPY = os.environ.get("BR_PRUNE_FRESH_COPY") == "1"
+PRUNE_IMPORTS = os.environ.get("BR_PRUNE_IMPORTS") == "1"
+PRUNE_ADDED_NAMES = os.environ.get("BR_PRUNE_ADDED_NAMES") == "1"
+SOURCE_READ_GUARD = os.environ.get("BR_SOURCE_READ_GUARD") == "1"
 
 K_DEF, K_STMT, K_HDR = 1, 2, 3
 F_EXPR = 3
@@ -147,7 +154,7 @@ class Selector:
         self.dialect = idx["dialect"]
         self.all = idx["all"]
         self.idents = idx["idents"]
-        self.import_tests = idx["import_tests"]
+        self.import_tests = 0 if PRUNE_IMPORTS else idx["import_tests"]
         self.risky_bits = 0
 
     @staticmethod
@@ -251,6 +258,8 @@ class Selector:
         return b | extra
 
     def added_names(self, path, rec, l, added):
+        if PRUNE_ADDED_NAMES:
+            return 0
         names = set()
         for s in added:
             m = DEF_OR_CLASS.match(s) or ASSIGN.match(s)
@@ -437,6 +446,30 @@ def main():
     tests = json.loads(open(os.path.join(data, "tests.json")).read())["tests"]
     idx = pickle.loads(zlib.decompress(open(INDEX, "rb").read()))
     sel = Selector(idx)
+    if IDENTITY_MODE not in ("off", "observed", "optimistic", "type-optimistic"):
+        raise ValueError(f"unknown identity heuristic mode: {IDENTITY_MODE}")
+    if ORDER_MODE not in ("off", "observed", "optimistic"):
+        raise ValueError(f"unknown ordering heuristic mode: {ORDER_MODE}")
+    if MAPPING_MODE not in ("off", "observed", "optimistic", "import-guarded"):
+        raise ValueError(f"unknown mapping heuristic mode: {MAPPING_MODE}")
+    if IDENTITY_MODE != "off" or ORDER_MODE != "off":
+        from heuristics import prune_identity, prune_ordering
+
+        profile_path = os.environ.get("BR_IDENTITY_INDEX", os.path.join(HERE, "data", "identity.bin"))
+        with open(profile_path, "rb") as profile_file:
+            profile = pickle.loads(zlib.decompress(profile_file.read()))
+        if profile["commit"] != idx["commit"] or profile["ids"] != idx["ids"]:
+            raise ValueError("identity profile does not match the baseline index")
+    if MAPPING_MODE != "off":
+        from heuristics import prune_mapping
+
+        mapping_path = os.environ.get("BR_MAPPING_INDEX", os.path.join(HERE, "data", "mapping.bin"))
+        with open(mapping_path, "rb") as profile_file:
+            mapping_profile = pickle.loads(zlib.decompress(profile_file.read()))
+        if mapping_profile["commit"] != idx["commit"] or mapping_profile["ids"] != idx["ids"]:
+            raise ValueError("mapping profile does not match the baseline index")
+    if PRUNE_FRESH_COPY:
+        from heuristics import prune_fresh_copy
 
     dur = {t["number"]: int(t["seconds"] * 1000 + 0.5) for t in tests}
     same = [t["id"] for t in tests] == idx["ids"] and all(t["number"] == i for i, t in enumerate(tests))
@@ -456,7 +489,20 @@ def main():
         commit = name[:-6]
         text = open(os.path.join(commits_dir, name), encoding="utf-8", errors="replace").read()
         try:
-            bits = sel.select(parse_patch(text))
+            files = parse_patch(text)
+            bits = sel.select(files)
+            if IDENTITY_MODE != "off":
+                bits = prune_identity(files, bits, profile, IDENTITY_MODE)
+            if ORDER_MODE != "off":
+                bits = prune_ordering(files, bits, profile, ORDER_MODE)
+            if MAPPING_MODE != "off":
+                bits = prune_mapping(files, bits, mapping_profile, MAPPING_MODE)
+            if PRUNE_FRESH_COPY:
+                bits = prune_fresh_copy(files, bits)
+            if SOURCE_READ_GUARD:
+                reads = idx["source_reads"]
+                for f in files:
+                    bits |= reads.get(f["old"], 0) | reads.get(f["new"], 0)
         except Exception as ex:  # noqa - never lose a commit to an analysis bug
             print(f"analysis failed for {commit}: {ex!r}", file=sys.stderr)
             bits = idx["all"]
