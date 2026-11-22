@@ -1,6 +1,34 @@
 # Blast Radius starter
 
-A working submission for the Blast Radius track. It runs every test on every commit, so it never misses a failure and scores badly. Your job is to run less without missing.
+A submission for the Blast Radius track, built from the official starter kit.
+
+## This submission
+
+The image uses a precomputed, per-test coverage and dependency index for the
+pinned SQLGlot revision. It maps old-side changes to indexed source regions,
+expands selections for fixtures and dependencies, then schedules the selected
+test numbers across up to eight workers. The image does not use sample answers
+or run tests at selection time. Added or unindexed source and fixture files
+fall back to all indexed tests; tests absent from the index are always included.
+
+This is a heuristic, not a proof of zero misses: coverage can miss new execution
+paths, import-time failures, reflection and subprocess behavior. The Python
+comment/docstring and documentation shortcuts can also miss source-inspection
+or other runtime effects. Validate independently before submitting.
+
+Run the selector regression tests with:
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+The coverage index was recorded with `COVERAGE_CORE=ctrace`, per-test contexts,
+`SKIP_INTEGRATION=0`, and the plugin in `tools/record/covplugin.py`. That plugin
+substitutes synchronous process pools for recording, so subprocess behavior
+remains an approximation. `tools/build_index.py` consumes the pinned checkout,
+coverage database, plugin metadata, and official `tests.json`; it does not use
+failure answers. The official sample and format checks remain `make sample` and
+`make check` below.
 
 ## The problem
 
