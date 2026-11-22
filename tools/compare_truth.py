@@ -6,6 +6,33 @@ import subprocess
 import sys
 
 
+def failed_numbers(result, tests):
+    """Map failures, including failed collection nodes, to official test numbers."""
+    id2n = {t["id"]: t["number"] for t in tests}
+    unknown = set(result["failed"]) - id2n.keys()
+    if unknown:
+        raise ValueError(f"unknown failed tests: {sorted(unknown)}")
+    collected = result["collect_failed"]
+    exit_code = result["exit"]
+    if not (
+        (exit_code == 0 and not result["failed"] and not collected)
+        or (exit_code == 1 and (result["failed"] or collected))
+        or (exit_code == 2 and collected)
+    ):
+        raise ValueError(f"inconsistent exit {exit_code}")
+    failed = {id2n[node] for node in result["failed"]}
+    for node in collected:
+        path = node.split("::", 1)[0].rstrip("/")
+        if not path:
+            raise ValueError(f"unmapped collection failure: {node!r}")
+        affected = {t["number"] for t in tests
+                    if t["file"] == path or t["file"].startswith(path + "/")}
+        if not affected:
+            raise ValueError(f"unmapped collection failure: {node!r}")
+        failed.update(affected)
+    return failed
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit("usage: compare_truth.py <data_dir> <truth_dir> <baseline.json>")
@@ -18,7 +45,6 @@ def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(data, "tests.json"), encoding="utf-8") as f:
         tests = json.load(f)["tests"]
-    id2n = {t["id"]: t["number"] for t in tests}
     run = subprocess.run(
         [sys.executable, os.path.join(root, "selector.py"), data],
         capture_output=True,
@@ -39,13 +65,16 @@ def main():
         commit = name[:-5]
         with open(os.path.join(truth, name), encoding="utf-8") as f:
             result = json.load(f)
-        unknown = set(result["failed"]) - id2n.keys()
-        inconsistent_exit = result["exit"] not in (0, 1) or bool(result["exit"]) != bool(result["failed"])
-        if result["collect_failed"] or unknown or inconsistent_exit or commit not in selected:
-            print(f"{commit}: INVALID truth: collect={result['collect_failed']} unknown={sorted(unknown)} exit={result['exit']}")
+        try:
+            failed = failed_numbers(result, tests)
+        except ValueError as exc:
+            print(f"{commit}: INVALID truth: {exc}")
             invalid += 1
             continue
-        failed = {id2n[node] for node in result["failed"]}
+        if commit not in selected:
+            print(f"{commit}: INVALID truth: no selector output")
+            invalid += 1
+            continue
         missing = failed - selected[commit]
         checked += 1
         failing += bool(failed)

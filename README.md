@@ -9,7 +9,8 @@ pinned SQLGlot revision. It maps old-side changes to indexed source regions,
 expands selections for fixtures and dependencies, then schedules the selected
 test numbers across up to eight workers. The image does not use sample answers
 or run tests at selection time. Added or unindexed source and fixture files
-fall back to all indexed tests; tests absent from the index are always included.
+and binary Python patches fall back to all indexed tests; tests absent from
+the index are always included.
 
 This is a heuristic, not a proof of zero misses: coverage can miss new execution
 paths, import-time failures, reflection and subprocess behavior. The Python
@@ -29,6 +30,39 @@ remains an approximation. `tools/build_index.py` consumes the pinned checkout,
 coverage database, plugin metadata, and official `tests.json`; it does not use
 failure answers. The official sample and format checks remain `make sample` and
 `make check` below.
+
+## Experimental semantic probes
+
+The experimental branch includes offline-only probes; neither their outputs nor
+sample answers are used by the selector. They do **not** justify pruning:
+recorded values may differ on another execution, and the identity/equality
+probe uses the recorder's synchronous process-pool approximation.
+
+With the pinned SQLGlot checkout in `SQLGLOT_SRC` and a `br-dev` validation
+image containing the packages in `requirements.lock` and `coverage`:
+
+```sh
+PROBE_DIR=$(mktemp -d)
+python3 tools/semantic_probe.py --src "$SQLGLOT_SRC" --data sample --out "$PROBE_DIR/input.json"
+docker run --rm --cpus 2 --network none \
+  -v "$SQLGLOT_SRC:/src:ro" -v "$PWD:/repo:ro" -v "$PROBE_DIR:/out" -w /src \
+  -e SKIP_INTEGRATION=0 -e PYTHONDONTWRITEBYTECODE=1 \
+  -e PYTHONPYCACHEPREFIX=/tmp/semantic-pycache -e PYTHONPATH=/src:/repo/tools \
+  -e SEMANTIC_PROBE_SRC=/src -e SEMANTIC_PROBE_INPUT=/out/input.json \
+  -e SEMANTIC_PROBE_OUTPUT=/out/profile.json br-dev \
+  python -c 'import json,pytest; p=json.load(open("/out/input.json")); raise SystemExit(pytest.main(["-p","semantic_probe","-p","no:cacheprovider","-q",*p["tests"]]))'
+python3 tools/evaluate_semantic_probe.py --data sample --answers sample/answers.json \
+  --selector-output output.jsonl --input "$PROBE_DIR/input.json" --profile "$PROBE_DIR/profile.json"
+python3 tools/mapping_probe.py --src "$SQLGLOT_SRC" --data sample --out "$PROBE_DIR/mapping.json"
+```
+
+The evaluator's score is an explicitly unsafe observation-only counterfactual,
+not the score of the experimental selector. The mapping probe reports possible
+key-level opportunities and unresolved whole-mapping reads; it excludes nothing.
+The truth runner applies patches with Git on the host, including binary patches,
+and maps test-collection failures to affected test files in `compare_truth.py`.
+It refuses to overwrite an existing case result; use a fresh output directory
+for a new run.
 
 ## The problem
 

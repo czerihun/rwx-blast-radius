@@ -356,7 +356,9 @@ class Selector:
         for f in files:
             status = f["status"]
             path = f["new"] if status == "added" else f["old"]
-            if path.startswith("tests/fixtures/"):
+            if f["binary"] and (f["old"].endswith(".py") or f["new"].endswith(".py")):
+                bits |= self.all
+            elif path.startswith("tests/fixtures/"):
                 ent = fix.get(path)
                 if status in ("added", "renamed") or ent is None or not any(ent):
                     bits |= self.all

@@ -16,6 +16,9 @@ class FallbackTests(unittest.TestCase):
                 "import_tests": 0,
                 "fix": {"tests/fixtures/example.sql": [0b001, 0b010, 0]},
                 "tests": {},
+                "by_func": {},
+                "by_class": {},
+                "by_file": {},
             }
         )
 
@@ -44,6 +47,29 @@ class FallbackTests(unittest.TestCase):
             "binary": False,
         }
         self.assertEqual(self.selector.select([file]), 0b111)
+
+    def test_binary_python_patch_selects_all(self):
+        self.selector.src["sqlglot/example.py"] = {}
+        self.selector.idx["tests"]["tests/test_example.py"] = {
+            "importers": [], "relative": False, "n": 0,
+        }
+        for path, binary_marker in (
+            ("sqlglot/example.py", "GIT binary patch"),
+            ("tests/test_example.py", "Binary files a/tests/test_example.py and b/tests/test_example.py differ"),
+            ("sqlglotc/setup.py", "GIT binary patch"),
+        ):
+            with self.subTest(path=path):
+                patch = f"diff --git a/{path} b/{path}\n{binary_marker}\n"
+                self.assertEqual(self.selector.select(parse_patch(patch)), 0b111)
+
+    def test_binary_rename_to_python_selects_all(self):
+        patch = """\
+diff --git a/docs/data.bin b/tests/test_example.py
+rename from docs/data.bin
+rename to tests/test_example.py
+GIT binary patch
+"""
+        self.assertEqual(self.selector.select(parse_patch(patch)), 0b111)
 
     def test_module_docstring_change_selects_module_users(self):
         record = {
